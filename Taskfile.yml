@@ -1,0 +1,6 @@
+version: "3"
+
+tasks:
+  activate:
+    cmds:
+      - source .venv/bin/activate

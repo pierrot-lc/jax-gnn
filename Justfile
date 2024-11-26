@@ -6,5 +6,9 @@ tests:
 
 compile-requirements:
   uv pip freeze | uv pip compile - -o requirements.txt
+
 pip-requirements:
   uv pip install -r requirements.txt
+
+venv:
+  uv venv --python 3.11 --allow-existing

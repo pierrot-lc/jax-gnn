@@ -1,0 +1,15 @@
+sync:
+  defaults:
+    mode: two-way-resolved
+    flushOnCreate: true
+    ignore:
+      vcs: true
+      paths:
+        - "mutagen.yml"
+        - "mutagen.yml.lock"
+        - "logs/"
+        - "wandb/"
+
+  jax-layers-solving:
+    alpha: "solving:~/paper-code/jax-layers/"
+    beta: .
