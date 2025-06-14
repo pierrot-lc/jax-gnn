@@ -1,18 +1,39 @@
 [project]
-name = "gnn-tuto"
+name = "jax-gnn"
+version = "0.1.0"
 description = "GNN tutorial with Jax and Equinox"
 authors = [
     {name = "Pierrot LC", email = "pierrotlc@proton.me"},
 ]
-requires-python = "==3.12.*"
+requires-python = "==3.13.*"
 readme = "README.md"
 license = {text = "MIT"}
+dependencies = [
+    "beartype>=0.21.0",
+    "equinox>=0.12.2",
+    "hydra-core>=1.3.2",
+    "jax[cuda12-local]>=0.6.1",
+    "jaxtyping>=0.3.2",
+    "networkx[default]>=3.5",
+    "numpy>=2.3.0",
+    "optax>=0.2.5",
+    "scipy>=1.15.3",
+    "tqdm>=4.67.1",
+    "wandb>=0.20.1",
+]
 
 [tool.ruff]
 src = ["src"]
+line-length = 100
 
 [tool.ruff.lint]
 ignore = [
     "F722",  # Jaxtype will throw false positives.
     "E731",  # Ignore lambda assignements (why is this even a thing?).
 ]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.basedpyright]
+typeCheckingMode = "basic"

@@ -5,61 +5,43 @@ import jax.experimental.sparse as jsparse
 import jax.numpy as jnp
 import jax.random as jr
 import networkx as nx
-from beartype import beartype
-from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray, jaxtyped
+import numpy as np
+from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
 from tqdm import tqdm
 
 
 class GraphData(eqx.Module):
-    adjacency: Int[
-        jsparse.BCOO, "n_nodes n_nodes"
-    ]  # a[i, j] = 1 <=> node j is link to node i.
-    edges: Int[Array, "n_edges 2"]  # e[n] = (j, i) <=> node j is linked to node i.
+    adjacency: Int[jsparse.BCOO, "n_nodes n_nodes"]
+    edges: Int[Array, "n_edges 2"]
     scores: Float[Array, " n_nodes"]
     mask: Bool[Array, " n_nodes"]
 
-    @classmethod
-    def from_networkx(cls, graph: nx.DiGraph) -> "GraphData":
-        n_nodes = len(graph)
-        edges = jnp.array(nx.edges(graph), dtype=jnp.int32)
-        adjacency = jsparse.BCOO(
-            (
-                jnp.ones(len(edges), dtype=jnp.int32),
-                jnp.flip(
-                    edges, axis=1
-                ),  # Recall that a[i, j] = 1 <=> node j is linked to node i.
-            ),
-            shape=(n_nodes, n_nodes),
-        )
-        scores = jnp.array([graph.nodes[i]["scores"] for i in range(len(graph))])
-        mask = jnp.ones(n_nodes, dtype=jnp.bool_)
-        return cls(adjacency, edges, scores, mask)
+    @property
+    def n_nodes(self) -> int:
+        return self.scores.shape[-1]
 
     @classmethod
-    def pad(cls, graph: "GraphData", max_nodes: int, max_edges: int) -> "GraphData":
-        """Add virtual nodes and edges to the given graph. The mask can be used to
-        retrieve the original nodes.
+    def from_networkx(cls, graph: nx.DiGraph, max_nodes: int, max_edges: int) -> "GraphData":
+        n_nodes, n_edges = graph.number_of_nodes(), graph.number_of_edges()
+        assert n_nodes < max_nodes, "A virtual node is necessary for virtual edges"
+        assert n_edges <= max_edges
 
-        Make sure that at least one virtual node is added. Virtual edges point to the
-        last virtual node (so that they do not interfere with real nodes).
-        """
-        n_nodes, n_edges = len(graph.adjacency), len(graph.edges)
-        assert max_nodes > n_nodes, "At least one virtual node must be created."
+        edges = np.full((max_edges, 2), fill_value=max_nodes - 1, dtype=int)
+        edges[:n_edges] = np.array(nx.edges(graph))
+        edges = jnp.array(edges)
 
-        edges = jnp.pad(
-            graph.edges,
-            ((0, max_edges - n_edges), (0, 0)),
-            mode="constant",
-            constant_values=max_nodes - 1,  # Virtual node.
-        )
         adjacency = jsparse.BCOO(
-            (jnp.ones(max_edges, dtype=jnp.int32), jnp.flip(edges, axis=1)),
+            (jnp.ones(max_edges, dtype=int), jnp.flip(edges, axis=1)),
             shape=(max_nodes, max_nodes),
         )
-        scores = jnp.pad(graph.scores, (0, max_nodes - n_nodes))
-        mask = jnp.pad(
-            graph.mask, (0, max_nodes - n_nodes), mode="constant", constant_values=False
-        )
+
+        scores = np.zeros((max_nodes,), float)
+        scores[:n_nodes] = np.array([graph.nodes[i]["scores"] for i in range(len(graph))])
+        scores = jnp.array(scores)
+
+        mask = np.zeros((max_nodes,), bool)
+        mask[:n_nodes] = True
+        mask = jnp.array(mask)
         return cls(adjacency, edges, scores, mask)
 
     @classmethod
@@ -78,10 +60,7 @@ class Dataset:
     def __init__(self, graphs: list[GraphData]):
         self.graphs = graphs
 
-    @jaxtyped(typechecker=beartype)
-    def iter(
-        self, batch_size: int, total_iters: int, key: PRNGKeyArray
-    ) -> Iterator[GraphData]:
+    def iter(self, batch_size: int, total_iters: int, key: PRNGKeyArray) -> Iterator[GraphData]:
         for sk in jr.split(key, total_iters):
             batch_ids = jr.choice(sk, len(self), (batch_size,))
             samples = [self[i] for i in batch_ids]
@@ -98,25 +77,20 @@ class Dataset:
         cls, dataset: "Dataset", split: float, *, key: PRNGKeyArray
     ) -> tuple["Dataset", "Dataset"]:
         """Randomly split the dataset into two non-overlapping subsets."""
-        assert 0 <= split <= 1
+        assert 0.0 <= split <= 1.0
 
         training_size = int(len(dataset) * split)
         perm = jr.permutation(key, len(dataset))
         training_graphs = [dataset.graphs[i] for i in perm[:training_size]]
-        val_graphs = [dataset.graphs[i] for i in perm[training_size:]]
-        return cls(training_graphs), cls(val_graphs)
+        test_graphs = [dataset.graphs[i] for i in perm[training_size:]]
+        return cls(training_graphs), cls(test_graphs)
 
     @classmethod
     def generate(cls, n_nodes: int, n_graphs: int, key: PRNGKeyArray) -> "Dataset":
         """Generate a random dataset to learn from.
 
-        The graphs are generated following the Erdős-Rényi model. The nodes' scores are
-        the clustering score.
-
-        ---
-        See:
-            https://networkx.org/documentation/stable/reference/generated/networkx.generators.random_graphs.erdos_renyi_graph.html
-            https://networkx.org/documentation/stable/reference/algorithms/generated/networkx.algorithms.cluster.clustering.html
+        The graphs are generated following the Erdős-Rényi model. The score to predict is the nodes'
+        betweenness score.
         """
         graphs = []
         seeds = [int(jr.key_data(sk)[1]) for sk in jr.split(key, n_graphs)]
@@ -127,32 +101,21 @@ class Dataset:
             # Keep the largest connected component.
             nodes = max(nx.weakly_connected_components(graph), key=len)
             graph = graph.subgraph(nodes).copy()
+
+            # Relabel nodes from 0 to N.
             graph = nx.relabel_nodes(
                 graph, {old_id: new_id for new_id, old_id in enumerate(graph.nodes)}
-            )  # Relabel nodes from 0 to N.
+            )
 
-            scores = nx.clustering(graph)
+            scores = nx.betweenness_centrality(graph)
             nx.set_node_attributes(graph, scores, "scores")
 
             graphs.append(graph)
 
-        # To Graph.
+        max_nodes = max(g.number_of_nodes() for g in graphs) + 1
+        max_edges = max(g.number_of_edges() for g in graphs)
         graphs = [
-            GraphData.from_networkx(graph)
-            for graph in tqdm(
-                graphs,
-                desc="To jax array",
-                total=len(graphs),
-                leave=False,
-            )
+            GraphData.from_networkx(graph, max_nodes, max_edges)
+            for graph in tqdm(graphs, desc="To jax array", total=len(graphs), leave=False)
         ]
-
-        # Pad the graphs.
-        max_nodes = max(len(g.adjacency) for g in graphs)
-        max_edges = max(len(g.edges) for g in graphs)
-        graphs = [
-            GraphData.pad(g, max_nodes + 1, max_edges)
-            for g in tqdm(graphs, desc="Padding graphs", leave=False)
-        ]
-
         return cls(graphs)

@@ -1,5 +1,3 @@
-from functools import partial
-
 import equinox as eqx
 import equinox.nn as nn
 import jax
@@ -7,225 +5,76 @@ import jax.experimental.sparse as jsparse
 import jax.numpy as jnp
 import jax.random as jr
 from beartype import beartype
-from jaxtyping import Array, Float, Int, PRNGKeyArray, jaxtyped
+from jaxtyping import Array, Float, Int, PRNGKeyArray, PyTree, Shaped, jaxtyped
+
+from .dataset import GraphData
 
 
 class GConvLayer(eqx.Module):
-    """Classical graph convolutional layer.
-
-    The aggregation function is the sum.
-    """
-
     linear: nn.Linear
     norm: nn.RMSNorm
 
-    def __init__(self, hidden_dim: int, *, key: PRNGKeyArray):
+    def __init__(self, hidden_dim: int, *, key: Shaped[PRNGKeyArray, ""]):
         self.linear = nn.Linear(hidden_dim, hidden_dim, key=key)
         self.norm = nn.RMSNorm(hidden_dim)
 
     def __call__(
-        self,
-        x: Float[Array, "n_nodes hidden_dim"],
-        a: Int[jsparse.BCOO, "n_nodes n_nodes"],
-        _: any,
+        self, x: Float[Array, "n_nodes hidden_dim"], a: Int[jsparse.BCOO, "n_nodes n_nodes"]
     ) -> Float[Array, "n_nodes hidden_dim"]:
-        """Apply the standard graph conv layer.
-
-        ---
-        Parameters:
-            x: Node embeddings.
-            a: Adjacency matrix where a[i, j] = 1 => edge from j to i.
-            _: Ignored (for compatibility with the GATLayer).
-
-        ---
-        Returns:
-            The updated node embeddings.
-        """
-        m = jax.vmap(self.linear)(x)
-        m = jax.nn.relu(m)
-
-        m = a @ m
-
-        x = jax.vmap(self.norm)(x + m)
-        return x
+        x_ = jax.vmap(self.norm)(x)
+        x_ = jax.vmap(self.linear)(x_)
+        x_ = a @ x_
+        return x_ + x
 
 
-class GATLayer(eqx.Module):
-    """Graph attention layer from the Graph Attention Networks paper.
-
-    This serves as an example of how one could use the list of edges to create a complex
-    GNN. The main function is `jax.ops.segment_sum`. Note that other functions can be
-    used to apply different aggregation schemes (such as `jax.ops.segment_min`).
-
-    This implementation is a single-head layer with an added norm and residual
-    connection.
-
-    Paper: https://arxiv.org/abs/1710.10903.
-    """
-
-    linear: nn.Linear
-    attention: nn.Sequential
+class SwiGLU(eqx.Module):
+    linear_1: nn.Linear
+    linear_2: nn.Linear
+    linear_3: nn.Linear
     norm: nn.RMSNorm
 
-    def __init__(self, hidden_dim: int, *, key: PRNGKeyArray):
-        keys = iter(jr.split(key, 2))
-        self.linear = nn.Linear(hidden_dim, hidden_dim, key=next(keys))
-        self.attention = nn.Sequential(
-            [
-                nn.Linear(
-                    2 * hidden_dim, out_features=1, use_bias=False, key=next(keys)
-                ),
-                nn.Lambda(partial(jax.nn.leaky_relu, negative_slope=0.2)),
-            ]
-        )
-        self.norm = nn.RMSNorm(hidden_dim)
-
-    def __call__(
-        self,
-        x: Float[Array, "n_nodes hidden_dim"],
-        _: any,
-        e: Int[Array, "n_edges 2"],
-    ) -> Float[Array, "n_nodes hidden_dim"]:
-        """Apply the GAT layer.
-
-        ---
-        Parameters:
-            x: Node embeddings.
-            _: Ignored (for compatibility with the GConvLayer).
-            e: Edge relations as a list of (source, destination) node ids.
-
-        ---
-        Returns:
-            The updated node embeddings.
-        """
-        # Information from neighbours.
-        m = x[e[:, 0]]
-        m = jax.vmap(self.linear)(m)
-
-        # Information from destination node.
-        s = x[e[:, 1]]
-        s = jax.vmap(self.linear)(s)
-
-        a = jnp.concat((m, s), axis=1)  # Shape of [n_edges, 2 * hidden_dim].
-        a = jax.vmap(self.attention)(a)  # Shape of [n_edges, 1].
-
-        # Apply the softmax combination in two steps:
-        # 1. Unormalized combination of the features.
-        # 2. Apply the normalization factor.
-        a = jax.lax.exp(a)
-        m = jax.ops.segment_sum(a * m, e[:, 1], len(x))
-        n = jax.ops.segment_sum(a, e[:, 1], len(x))
-        m = x / jnp.where(n == 0.0, 1.0, n)  # Avoid division by 0.
-
-        m = jax.nn.relu(m)
-        x = jax.vmap(self.norm)(m + x)
-        return x
-
-
-class HiddenLayer(eqx.Module):
-    linear: nn.Linear
-    norm: nn.RMSNorm
-
-    def __init__(self, hidden_dim: int, *, key: PRNGKeyArray):
-        self.linear = nn.Linear(hidden_dim, hidden_dim, key=key)
+    def __init__(self, hidden_dim: int, *, key: Shaped[PRNGKeyArray, ""]):
+        keys = iter(jr.split(key, 3))
+        self.linear_1 = nn.Linear(hidden_dim, 8 * hidden_dim // 3, key=next(keys))
+        self.linear_2 = nn.Linear(hidden_dim, 8 * hidden_dim // 3, key=next(keys))
+        self.linear_3 = nn.Linear(8 * hidden_dim // 3, hidden_dim, key=next(keys))
         self.norm = nn.RMSNorm(hidden_dim)
 
     def __call__(self, x: Float[Array, " hidden_dim"]) -> Float[Array, " hidden_dim"]:
-        y = self.linear(x)
-        y = jax.nn.relu(y)
-        return self.norm(x + y)
-
-
-class GNN(eqx.Module):
-    """Sequentially apply a list of graph layers and simple hidden layers."""
-
-    convs: GConvLayer | GATLayer
-    hiddens: HiddenLayer
-
-    def __init__(
-        self, hidden_dim: int, n_layers: int, conv_type: str, *, key: PRNGKeyArray
-    ):
-        keys = iter(jr.split(key, 2))
-        make_hidden = lambda k: HiddenLayer(hidden_dim, key=k)
-        match conv_type:
-            case "sum":
-                make_conv = lambda k: GConvLayer(hidden_dim, key=k)
-            case "gat":
-                make_conv = lambda k: GATLayer(hidden_dim, key=k)
-            case _:
-                raise ValueError(f"Unknown conv type: {conv_type}")
-
-        self.convs = eqx.filter_vmap(make_conv)(jr.split(next(keys), n_layers))
-        self.hiddens = eqx.filter_vmap(make_hidden)(jr.split(next(keys), n_layers))
-
-    def __call__(
-        self,
-        x: Float[Array, "n_nodes hidden_dim"],
-        a: Int[jsparse.BCOO, "n_nodes n_nodes"],
-        e: Int[Array, "n_edges 2"],
-    ) -> Float[Array, "n_nodes hidden_dim"]:
-        """Apply all GNN layers.
-
-        ---
-        Parameters:
-            x: Node embeddings.
-            a: Adjacency matrix where a[i, j] = 1 => edge from j to i.
-                Used if conv_type == "sum".
-            e: Edge relations as a list of (source, destination) node ids.
-                Used if conv_type == "gat".
-
-        ---
-        Returns:
-            The updated node embeddings.
-        """
-        layers = (self.convs, self.hiddens)
-        dynamic, static = eqx.partition(layers, eqx.is_array)
-
-        def scan_fn(x, layer):
-            conv, hidden = eqx.combine(layer, static)
-            x = conv(x, a, e)
-            x = jax.vmap(hidden)(x)
-            return x, None
-
-        x, _ = jax.lax.scan(scan_fn, x, dynamic)
-        return x
+        x_ = self.norm(x)
+        x_ = jax.nn.swish(self.linear_1(x_)) * self.linear_2(x_)
+        x_ = self.linear_3(x_)
+        return x_ + x
 
 
 class RankingModel(eqx.Module):
-    gnn: GNN
+    hidden_dim: int = eqx.field(static=True)
+    convs: GConvLayer
+    ffns: SwiGLU
     predict: nn.Linear
-    hidden_dim: int
 
-    def __init__(
-        self, hidden_dim: int, n_layers: int, conv_type: str, *, key: PRNGKeyArray
-    ):
-        super().__init__()
-        sk = iter(jr.split(key, 2))
-        self.gnn = GNN(hidden_dim, n_layers, conv_type, key=next(sk))
-        self.predict = nn.Linear(hidden_dim, "scalar", key=next(sk))
+    def __init__(self, hidden_dim: int, n_layers: int, *, key: Shaped[PRNGKeyArray, ""]):
+        keys = iter(jr.split(key, 3))
+        make_conv = lambda k: GConvLayer(hidden_dim, key=k)
+        make_ffn = lambda k: SwiGLU(hidden_dim, key=k)
+
         self.hidden_dim = hidden_dim
+        self.convs = eqx.filter_vmap(make_conv)(jr.split(next(keys), n_layers))
+        self.ffns = eqx.filter_vmap(make_ffn)(jr.split(next(keys), n_layers))
+        self.predict = nn.Linear(hidden_dim, "scalar", use_bias=False, key=next(keys))
 
     @eqx.filter_jit
     @jaxtyped(typechecker=beartype)
-    def __call__(
-        self,
-        a: Int[jsparse.BCOO, "n_nodes n_nodes"],
-        e: Int[Array, "n_edges 2"],
-    ) -> Float[Array, " n_nodes"]:
-        """Predict the score of all nodes in the graph.
+    def __call__(self, g: GraphData, key: Shaped[PRNGKeyArray, ""]) -> Float[Array, " n_nodes"]:
+        dynamic, static = eqx.partition((self.convs, self.ffns), eqx.is_array)
 
-        ---
-        Parameters:
-            a: Adjacency matrix where a[i, j] = 1 => edge from j to i.
-                Used if conv_type == "sum".
-            e: Edge relations as a list of (source, destination) node ids.
-                Used if conv_type == "gat".
+        def scan_fn(x: Float[Array, "n_nodes hidden_dim"], dynamic: PyTree):
+            conv, ffn = eqx.combine(dynamic, static)
+            x = conv(x, g.adjacency)
+            x = jax.vmap(ffn)(x)
+            return x, None
 
-        ---
-        Returns:
-            The node's scores.
-        """
-        x = jnp.zeros((len(a), self.hidden_dim), dtype=jnp.float32)
-        x = self.gnn(x, a, e)
+        x = jr.uniform(key, (g.n_nodes, self.hidden_dim), dtype=jnp.float32)
+        x, _ = jax.lax.scan(scan_fn, x, dynamic)
         x = jax.vmap(self.predict)(x)
         return x

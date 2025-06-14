@@ -1,28 +1,26 @@
 from dataclasses import dataclass
+from typing import Literal
 
 import jax.random as jr
-from jaxtyping import PRNGKeyArray
+from jaxtyping import PRNGKeyArray, Shaped
 from omegaconf import DictConfig
 
 
 @dataclass
 class DatasetConfig:
-    n_nodes: int
     n_graphs: int
-    generation_key: PRNGKeyArray
-    split_key: PRNGKeyArray
+    n_nodes: int
+    key: Shaped[PRNGKeyArray, ""]
 
     def __post_init__(self):
-        self.generation_key = jr.key(self.generation_key)
-        self.split_key = jr.key(self.split_key)
+        self.key = jr.key(self.key)
 
 
 @dataclass
 class ModelConfig:
     hidden_dim: int
     n_layers: int
-    conv_type: str
-    key: PRNGKeyArray
+    key: Shaped[PRNGKeyArray, ""]
 
     def __post_init__(self):
         self.key = jr.key(self.key)
@@ -30,12 +28,12 @@ class ModelConfig:
 
 @dataclass
 class TrainerConfig:
-    learning_rate: float
     batch_size: int
-    train_iter: int
-    eval_iter: int
-    eval_freq: int
-    key: PRNGKeyArray
+    evaluation_freq: int
+    evaluation_iters: int
+    learning_rate: float
+    training_iters: int
+    key: Shaped[PRNGKeyArray, ""]
 
     def __post_init__(self):
         self.key = jr.key(self.key)
@@ -44,12 +42,7 @@ class TrainerConfig:
 @dataclass
 class WandbConfig:
     entity: str
-    group: str | None
-    mode: str
-
-    def __post_init__(self):
-        if self.group.lower() == "none":
-            self.group = None
+    mode: Literal["online", "offline", "disabled"]
 
 
 @dataclass
