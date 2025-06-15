@@ -27,6 +27,7 @@ def main(dict_config: DictConfig):
     model = RankingModel(
         config.model.hidden_dim,
         config.model.n_layers,
+        config.model.mode,
         key=config.model.key,
     )
 

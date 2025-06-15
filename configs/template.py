@@ -19,6 +19,7 @@ class DatasetConfig:
 @dataclass
 class ModelConfig:
     hidden_dim: int
+    mode: Literal["adjacency", "edges"]
     n_layers: int
     key: Shaped[PRNGKeyArray, ""]
 

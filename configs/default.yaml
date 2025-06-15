@@ -6,6 +6,7 @@ dataset:
 
 model:
   hidden_dim: 32
+  mode: adjacency  # adjacency or edges
   n_layers: 5
   key: 66
 
@@ -14,14 +15,14 @@ trainer:
   evaluation_freq: 100
   evaluation_iters: 20
   learning_rate: 3e-4
-  training_iters: 50000
+  training_iters: 2000
   key: 42
 
 wandb:
   entity: pierrotlc
   mode: ${..mode}
 
-mode: offline
+mode: online
 
 hydra:
   job:

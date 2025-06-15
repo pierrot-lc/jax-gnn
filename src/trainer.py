@@ -58,6 +58,15 @@ class Trainer(eqx.Module):
                     step=batch_id,
                 )
 
+        # Final evaluation.
+        logger.log(
+            {
+                "train": self.eval(model, train_dataset, next(keys)),
+                "test": self.eval(model, test_dataset, next(keys)),
+            },
+            step=self.training_iters,
+        )
+
     def eval(
         self, model: RankingModel, dataset: Dataset, key: Shaped[PRNGKeyArray, ""]
     ) -> dict[str, float]:

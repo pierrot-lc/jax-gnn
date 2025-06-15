@@ -1,4 +1,5 @@
 from collections.abc import Iterator
+import math
 
 import equinox as eqx
 import jax.experimental.sparse as jsparse
@@ -86,16 +87,20 @@ class Dataset:
         return cls(training_graphs), cls(test_graphs)
 
     @classmethod
-    def generate(cls, n_nodes: int, n_graphs: int, key: PRNGKeyArray) -> "Dataset":
+    def generate(
+        cls, n_nodes: int, n_graphs: int, key: PRNGKeyArray, average_node_degree: int = 5
+    ) -> "Dataset":
         """Generate a random dataset to learn from.
 
-        The graphs are generated following the Erdős-Rényi model. The score to predict is the nodes'
-        betweenness score.
+        The graphs are generated following the geometric model, with a specific average node degree.
+        The score to predict is the nodes' betweenness score.
         """
         graphs = []
         seeds = [int(jr.key_data(sk)[1]) for sk in jr.split(key, n_graphs)]
+        radius = math.sqrt(average_node_degree / ((n_nodes - 1) * math.pi))
+
         for seed in tqdm(seeds, desc="Generating graphs", leave=False):
-            graph = nx.erdos_renyi_graph(n_nodes, seed=seed, p=0.05, directed=False)
+            graph = nx.random_geometric_graph(n_nodes, radius, seed=seed)
             graph = nx.to_directed(graph)
 
             # Keep the largest connected component.

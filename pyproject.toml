@@ -36,3 +36,9 @@ docstring-code-format = true
 
 [tool.basedpyright]
 typeCheckingMode = "basic"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.0",
+    "scipy>=1.15.3",
+]

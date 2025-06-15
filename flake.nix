@@ -29,6 +29,7 @@
     pythonPackages = pkgs.python313Packages;
 
     packages = [
+      pkgs.just
       pkgs.uv
       pythonPackages.venvShellHook
     ];
@@ -58,7 +59,8 @@
         export PATH="$PATH:${cudaPackages.cudatoolkit}/bin"  # Add ptxas to PATH.
 
         uv sync
-        TF_CPP_MIN_LOG_LEVEL=0 python -c "from jax.extend.backend import get_backend; print('Backend:', get_backend().platform)"
+        just device-check
+        just tests
       '';
     };
   in {
