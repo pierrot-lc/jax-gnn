@@ -7,14 +7,12 @@ import jax.random as jr
 import optax
 from beartype import beartype
 from jaxtyping import Array, Float, PRNGKeyArray, Shaped, jaxtyped
-from scipy.stats import kendalltau
 from tqdm import tqdm
 from wandb.wandb_run import Run
 
 from .dataset import Dataset, GraphData
 from .gnn import RankingModel
-from .utils import count_params, keys_generator, pointwise_cross_entropy
-from .utils import kendalltau as kd
+from .utils import count_params, kendalltau, keys_generator, pointwise_cross_entropy
 
 
 class Trainer(eqx.Module):
@@ -105,6 +103,7 @@ class Trainer(eqx.Module):
         model = eqx.apply_updates(model, updates)
         return model, opt_state
 
+    @eqx.filter_jit
     @jaxtyped(typechecker=beartype)
     def batch_metrics(
         self, model: RankingModel, batch: GraphData, key: Shaped[PRNGKeyArray, ""]
@@ -117,16 +116,8 @@ class Trainer(eqx.Module):
         losses = jax.vmap(pointwise_cross_entropy)(
             pred_scores, batch.scores, batch.mask, jr.split(sk2, batch_size)
         )
-        kt_scores = jnp.array(
-            [
-                kendalltau(pred[mask], true[mask], nan_policy="raise").statistic
-                for pred, true, mask in zip(pred_scores, batch.scores, batch.mask)
-            ]
-        )
-        # Score can be inf if all nodes have the same score.
-        kt_scores = jnp.where(jnp.isfinite(kt_scores), kt_scores, 0.0)
+        kt_scores = jax.vmap(kendalltau)(pred_scores, batch.scores, batch.mask)
 
         metrics["loss"] = losses
         metrics["KT-scores"] = kt_scores
-        metrics["KT-scores (mine)"] = jax.vmap(kd)(pred_scores, batch.scores, batch.mask)
         return metrics

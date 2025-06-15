@@ -47,20 +47,19 @@ def kendalltau(
     See:
         https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.kendalltau.html
     """
-    (n_points,) = x.shape
-    arange = jnp.arange(n_points)
-
-    x_sign = jnp.sign(x[None, :] - x[:, None]).astype(bool)
-    y_sign = jnp.sign(y[None, :] - y[:, None]).astype(bool)
+    x_sign = jnp.sign(x[None, :] - x[:, None]).astype(int)
+    y_sign = jnp.sign(y[None, :] - y[:, None]).astype(int)
     mask = mask[:, None] @ mask[None, :]
-    mask = mask.at[arange, arange].set(False)  # Ignore self-comparisons.
+    mask = jnp.triu(mask, k=1)
 
     P = jnp.sum((x_sign == y_sign) & (x_sign != 0) & (y_sign != 0), where=mask)
     Q = jnp.sum((x_sign != y_sign) & (x_sign != 0) & (y_sign != 0), where=mask)
     T = jnp.sum((x_sign == 0) & (y_sign != 0), where=mask)
     U = jnp.sum((y_sign == 0) & (x_sign != 0), where=mask)
 
-    return (P - Q) / jnp.sqrt((P + Q + T) * (P + Q + U))
+    score = (P - Q) / jnp.sqrt((P + Q + T) * (P + Q + U))
+    score = jnp.where(jnp.isfinite(score), score, 0.0)
+    return score
 
 
 def keys_generator(key: Shaped[PRNGKeyArray, ""]) -> Iterator[Shaped[PRNGKeyArray, ""]]:

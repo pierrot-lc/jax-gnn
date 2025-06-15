@@ -286,7 +286,6 @@ dependencies = [
     { name = "networkx", extra = ["default"] },
     { name = "numpy" },
     { name = "optax" },
-    { name = "scipy" },
     { name = "tqdm" },
     { name = "wandb" },
 ]
@@ -301,7 +300,6 @@ requires-dist = [
     { name = "networkx", extras = ["default"], specifier = ">=3.5" },
     { name = "numpy", specifier = ">=2.3.0" },
     { name = "optax", specifier = ">=0.2.5" },
-    { name = "scipy", specifier = ">=1.15.3" },
     { name = "tqdm", specifier = ">=4.67.1" },
     { name = "wandb", specifier = ">=0.20.1" },
 ]
