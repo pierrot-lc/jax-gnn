@@ -31,7 +31,7 @@ The training is logged to WandB. Have a look to the [Hydra][hydra] (for HPs conf
 
 
 [betweenness-centrality]:   https://networkx.org/documentation/stable/reference/algorithms/generated/networkx.algorithms.centrality.betweenness_centrality.html
-[blogpost]:                 https://pierrot-lc.dev/posts/2024-09-02_jax-gnn/
+[blogpost]:                 https://pierrot-lc.dev/posts/jax-gnn/
 [hydra]:                    https://hydra.cc/
 [kendall-tau]:              https://en.wikipedia.org/wiki/Kendall_rank_correlation_coefficient
 [margin-ranking-loss]:      https://pytorch.org/docs/stable/generated/torch.nn.MarginRankingLoss.html
